@@ -1,0 +1,2 @@
+# Pyxiv
+Pixiv *unofficial* API.

@@ -10,7 +10,6 @@ from io import BytesIO
 from datetime import datetime, timedelta
 
 from PIL import Image
-from requests.models import get_auth_from_url
 
 from selenium import webdriver
 
@@ -19,7 +18,7 @@ _pixiv_ajax = _pixiv_root + '/ajax'
 _pixiv_login = 'https://accounts.pixiv.net/login'
 _pixiv_image = 'https://i.pximg.net/img-original/img/'
 
-_user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/95.0.4638.69 Safari/537.36'
+_user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/95.0.4638.69 Safari/537.36'
 
 logging.basicConfig(filename='.log', level=logging.WARNING)
 
@@ -48,14 +47,6 @@ def get_cookie(username, password):
     _driver.quit()
 
     return cookies
-
-def make_query(kwargs):
-    return (
-        '?' + '&'.join(
-            '{}={}'.format(*x) for x in kwargs.items()
-        ) 
-        if kwargs is not None else ''
-    )
 
 def shift_date(date):
     date, timezone = date.split('+')
@@ -87,7 +78,10 @@ class Illust:
             self.dict = {
                 'id': int(illust_dict['id']),
                 'title': illust_dict['title'],
-                'author': User(userId=illust_dict['userId'],name=illust_dict['userName']),
+                'author': User(
+                    userId=illust_dict['userId'],
+                    name=illust_dict['userName']
+                ),
                 'uploadDate': shift_date(illust_dict['uploadDate']),
                 'thumb': illust_dict['urls']['thumb'],
                 'ext': illust_dict['urls']['original'].split('.')[-1],
@@ -97,7 +91,10 @@ class Illust:
             self.dict = {
                 'id': int(illust_dict['id']),
                 'title': illust_dict['title'],
-                'author': User(userId=illust_dict['userId'],name=illust_dict['userName']),
+                'author': User(
+                    userId=illust_dict['userId'],
+                    name=illust_dict['userName']
+                ),
                 'uploadDate': illust_dict['createDate'],
                 'thumb': illust_dict['url'],
                 'ext': illust_dict['url'].split('.')[-1],
@@ -140,16 +137,17 @@ class PixivAPI:
                 for arg in args:
                     kwargs.pop(arg)
 
-                req_url += make_query(kwargs)
+                req_url += ('?' + '&'.join('{}={}'.format(*x) for x in kwargs.items()) if kwargs is not None else '')
+
                 res = json.loads(self.session.get(req_url).text)
                 
-                return func(self, res)
+                return func(res)
 
             return wrapper
         
         return decorator
 
-    def get_user_data(self, user_id:int) -> User:
+    def get_user_data(self, user_id:int, **kwargs) -> User: 
         '''
         get detail information about user.
 
@@ -157,13 +155,12 @@ class PixivAPI:
         '''
 
         @self._get_response('/user/%(user_id)d')
-        def func(res):
-            res = res['body']
-            return User(**res)
+        def func(res: dict) -> User:
+            return User(**res['body'])
 
-        return func(user_id=user_id)
+        return func(user_id=user_id, **kwargs)
 
-    def get_illust_data(self, illust_id:int) -> Illust:
+    def get_illust_data(self, illust_id:int, **kwargs) -> Illust:
         '''
         get detail information about illust.
 
@@ -171,30 +168,23 @@ class PixivAPI:
         '''
 
         @self._get_response('/illust/%(illust_id)d')
-        def func(res):
-            res = res['body']
-            return Illust(**res)
+        def func(res: dict) -> Illust:
+            return Illust(**res['body'])
         
-        return func(illust_id=illust_id)
+        return func(illust_id=illust_id, **kwargs)
 
-    def get_follow_latest(self) -> list:
+    def get_follow_latest(self, **kwargs) -> list:
         '''
-        get list of illust
+        get list of illust that drawn by user you followed.
         '''
 
         @self._get_response('/follow_latest/illust')
-        def func(res) -> list:
-            illust_raw_list = res['body']['thumbnails']['illust']
-            illust_list = []
+        def func(res: dict) -> list:
+            return [Illust(**illust) for illust in res['body']['thumbnails']['illust']]
 
-            for illust in illust_raw_list:
-                illust_list.append(Illust(**illust))
+        return func(**kwargs)
 
-            return illust_list
-
-        return func()
-
-    def get_user_illust_list(self, user_id:int):
+    def get_user_illust_list(self, user_id:int, **kwargs):
         '''
         get list of illust that drawn by user identified as user_id
 
@@ -205,7 +195,7 @@ class PixivAPI:
         def func(res):
             return list(res['body']['illusts'].keys())
 
-        return func(user_id=user_id)
+        return func(user_id=user_id, **kwargs)
 
     def get_illust_list(self, tag: list = None, **kwargs) -> list:
         '''
@@ -234,8 +224,7 @@ class PixivAPI:
 
         @self._get_response('/search/artworks/%(tags)s')
         def func(res):
-            res = res['body']['illustManga']['data']
-            return [Illust(**x) for x in res if 'id' in x.keys()]
+            return [Illust(**x) for x in res['body']['illustManga']['data'] if 'id' in x.keys()]
 
         return func(tags=tag_string, **kwargs)
 
@@ -258,19 +247,24 @@ class PixivAPI:
         page_count = illust_dict['pageCount']
         ext = illust_dict['ext']
 
-        def make_url(i):
-            date_format = '%Y-%m-%d/%H:%M:%S'
-            path_format = '%Y/%m/%d/%H/%M/%S'
-
-            date = datetime.strptime(illust_dict['uploadDate'], date_format)
-            return _pixiv_image + date.strftime(path_format) + f'/{id}_p{i}.{ext}'
-
         if thumb:
             response = self.session.get(illust_dict['thumb'], stream=True)
             return Image.open(BytesIO(response.content))
 
+        def page_generator():
+            def make_url(i):
+                date = illust_dict['uploadDate']
+                date = date.replace('-', '/').replace(':', '/')
+
+                file = f'/{id}_p{i}.{ext}'
+
+                return _pixiv_image + date + file
+
+            for i in range(page_count):
+                yield make_url(i), file_name % { **illust_dict.dict, 'idx': i }, i
+
         res = []
-        for url, name, i in ((make_url(i), file_name % dict(illust_dict.dict, idx=i), i) for i in range(page_count)):
+        for url, name, i in page_generator():
             if (indices is not None) and (i not in indices):
                 continue
 
@@ -299,9 +293,10 @@ class PixivAPI:
                 with open(full_path + '/' + name, 'wb') as f:
                     f.write(content)
 
+
 if __name__ == "__main__":
     with open('C:\\Users\\user\\Desktop\\cookie.json') as f:
         cookie = json.load(f)
     
     api = PixivAPI(cookies=cookie)
-    api.get_illust_data(87344294)
+    print(api.get_follow_latest())

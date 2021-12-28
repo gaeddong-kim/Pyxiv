@@ -59,23 +59,24 @@ def shift_date(date):
     return date.strftime('%Y-%m-%d/%H:%M:%S')
 
 
-class User:
+class User(dict):
     def __init__(self, **user_dict):
-        if user_dict is not None:
-            self.id    = int(user_dict['userId'])
-            self.name  = user_dict['name']
+        super().__init__({
+            'id': int(user_dict['userId']),
+            'name': user_dict['name']
+        })
 
-    def __getitem__(self, item):
-        return self.__getattribute__(item)
+    def __getattr__(self, item):
+        return self[item]
 
     def __repr__(self):
         return f'user {self.name} ({self.id})'
 
 
-class Illust:
+class Illust(dict):
     def __init__(self, **illust_dict):
         try:
-            self.dict = {
+            super().__init__({
                 'id': int(illust_dict['id']),
                 'title': illust_dict['title'],
                 'author': User(
@@ -86,9 +87,9 @@ class Illust:
                 'thumb': illust_dict['urls']['thumb'],
                 'ext': illust_dict['urls']['original'].split('.')[-1],
                 'pageCount': illust_dict['pageCount']
-            }
+            })
         except:
-            self.dict = {
+            super().__init__({
                 'id': int(illust_dict['id']),
                 'title': illust_dict['title'],
                 'author': User(
@@ -99,25 +100,16 @@ class Illust:
                 'thumb': illust_dict['url'],
                 'ext': illust_dict['url'].split('.')[-1],
                 'pageCount': illust_dict['pageCount']
-            }
-        
-        if type(self['id']) != int:
-            self['id'] = int(self['id'])
-
-    def __getitem__(self, item):
-        return self.dict[item]
+            })
 
     def __getattr__(self, item):
-        return self.dict[item]
+        return self[item]
 
     def __repr__(self):
         return f'{self.title} ({self.id})'
 
 
 class PixivAPI:
-    '''
-    '''
-
     def __init__(self, cookies: list):
         self.session = requests.Session()
 
@@ -129,15 +121,20 @@ class PixivAPI:
                 self.session.cookies.set(cookie['name'], cookie['value'])
 
     def _get_response(self, url: str):
+        def make_params(kwargs):
+            if kwargs is None:
+                return ''
+            
+            return '?' + '&'.join('{}={}'.format(*x) for x in kwargs.items())
+
         def decorator(func):
             def wrapper(**kwargs):
                 req_url = _pixiv_ajax + url % kwargs
 
-                args = re.findall('%\((.+)\).', url)
-                for arg in args:
+                for arg in re.findall('%\((.+)\).', url):
                     kwargs.pop(arg)
 
-                req_url += ('?' + '&'.join('{}={}'.format(*x) for x in kwargs.items()) if kwargs is not None else '')
+                req_url += make_params(kwargs)
 
                 res = json.loads(self.session.get(req_url).text)
                 
@@ -180,7 +177,10 @@ class PixivAPI:
 
         @self._get_response('/follow_latest/illust')
         def func(res: dict) -> list:
-            return [Illust(**illust) for illust in res['body']['thumbnails']['illust']]
+            return [
+                Illust(**illust) 
+                for illust in res['body']['thumbnails']['illust']
+            ]
 
         return func(**kwargs)
 
@@ -217,14 +217,19 @@ class PixivAPI:
         '''
 
         if 'order' not in kwargs.keys(): kwargs['order'] = 'date_d'
-        if kwargs['order'] not in ('date', 'date_d', 'popular_d', 'popular_male_d', 'popular_female_d'):
+        if kwargs['order'] not in ('date', 'date_d', 'popular_d', 
+                                   'popular_male_d', 
+                                   'popular_female_d'):
             raise RuntimeError('Wrong order!')
 
         tag_string = urllib.parse.quote(' '.join(tag))
 
         @self._get_response('/search/artworks/%(tags)s')
         def func(res):
-            return [Illust(**x) for x in res['body']['illustManga']['data'] if 'id' in x.keys()]
+            return [
+                Illust(**x) 
+                for x in res['body']['illustManga']['data'] if 'id' in x.keys()
+            ]
 
         return func(tags=tag_string, **kwargs)
 
@@ -261,7 +266,7 @@ class PixivAPI:
                 return _pixiv_image + date + file
 
             for i in range(page_count):
-                yield make_url(i), file_name % { **illust_dict.dict, 'idx': i }, i
+                yield make_url(i), file_name % { **illust_dict, 'idx': i }, i
 
         res = []
         for url, name, i in page_generator():
